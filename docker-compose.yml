@@ -1,0 +1,22 @@
+services:
+  red:
+    build: .
+    container_name: red-v2-copilot
+    restart: unless-stopped
+    networks:
+      - meeks
+    ports:
+      - 127.0.0.1:8111:8111
+    expose:
+      - "8111"
+    environment:
+      - DEFAULT_WORLD_STATE=DISARMED
+      - SWITCH_SELF_UPGRADE=false
+      - SWITCH_ALWAYS_ON_AGENTS=false
+      - SWITCH_COEXISTENCE=false
+      - ALLOW_SHELL_EXEC=false
+      - ALLOW_UI_AUTOMATION=false
+      - ALLOW_DOCKER_CONTROL=false
+networks:
+  meeks:
+    external: true
