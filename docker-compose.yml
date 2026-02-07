@@ -17,6 +17,7 @@ services:
       - ALLOW_SHELL_EXEC=false
       - ALLOW_UI_AUTOMATION=false
       - ALLOW_DOCKER_CONTROL=false
+      - CONTROL_PLANE_URL=http://control-plane-meeks-control-plane:8088
 networks:
   meeks:
     external: true
