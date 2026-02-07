@@ -1,6 +1,9 @@
 from fastapi import FastAPI
+from app.propose import router as propose_router
 
 app = FastAPI(title="Red v2 (Copilot)", version="0.1.0")
+
+app.include_router(propose_router)
 
 @app.get("/health")
 def health():
