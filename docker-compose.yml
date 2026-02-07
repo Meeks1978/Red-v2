@@ -4,9 +4,9 @@ services:
     container_name: red-v2-copilot
     restart: unless-stopped
     networks:
-      - meeks
+      - openwebui_meeks
     ports:
-      - 127.0.0.1:8111:8111
+      - "127.0.0.1:8111:8111"
     expose:
       - "8111"
     environment:
@@ -17,7 +17,7 @@ services:
       - ALLOW_SHELL_EXEC=false
       - ALLOW_UI_AUTOMATION=false
       - ALLOW_DOCKER_CONTROL=false
-      - CONTROL_PLANE_URL=http://control-plane-meeks-control-plane:8088
+      - CONTROL_PLANE_URL=http://meeks-control-plane:8088
 networks:
-  meeks:
+  openwebui_meeks:
     external: true

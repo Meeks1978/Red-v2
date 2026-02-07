@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Literal, Tuple, Any
 import os
 import time
+from app.signals import probe_control_plane
 
 PillarName = Literal[
     "identity",
@@ -68,6 +69,8 @@ def compute_pillars() -> Dict[str, Any]:
     """
     start = time.time()
 
+    cp_ok, cp_detail = probe_control_plane()
+
     # Core policy signals (from env) — these enforce your Phase-5 discipline.
     disarmed = (os.getenv("DEFAULT_WORLD_STATE", "DISARMED").upper() == "DISARMED")
     switches_off = all([
@@ -102,6 +105,7 @@ def compute_pillars() -> Dict[str, Any]:
                    detail="ALLOW_* execution flags are false"),
         ],
         "governance": [
+            Signal("control plane reachable", ok=cp_ok, weight=6, detail=cp_detail),
             Signal("phase-6 switches off", ok=switches_off, weight=6,
                    detail="self-upgrade/always-on/coexistence switches are OFF"),
             Signal("approval required (design)", ok=True, weight=4,

@@ -1,5 +1,7 @@
 from fastapi import APIRouter
 from app.control_plane_client import control_plane_url, probe_health, fetch_info, list_runners
+from app.control_plane_client import fetch_openapi
+
 
 router = APIRouter()
 
@@ -23,3 +25,7 @@ def cp_info():
 @router.get("/integrations/control-plane/runners")
 def cp_runners():
     return list_runners()
+
+@router.get("/integrations/control-plane/openapi")
+def cp_openapi():
+    return fetch_openapi()

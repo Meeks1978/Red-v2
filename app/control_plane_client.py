@@ -30,15 +30,14 @@ def _get(path: str) -> Tuple[int, Any]:
 
 def probe_health() -> Dict[str, Any]:
     """
-    Try common health endpoints; return the first successful response.
+    Try known health endpoints; return the first successful response.
     """
-    candidates = ["/health", "/healthz", "/status", "/"]
+    candidates = ["/health", "/healthz", "/status"]
     for p in candidates:
         code, payload = _get(p)
         if code and 200 <= code < 300:
             return {"ok": True, "endpoint": p, "status_code": code, "payload": payload}
     return {"ok": False, "endpoint": None, "status_code": 0, "payload": {"error": "no healthy endpoint found"}}
-
 
 def fetch_info() -> Dict[str, Any]:
     """
@@ -54,11 +53,18 @@ def fetch_info() -> Dict[str, Any]:
 
 def list_runners() -> Dict[str, Any]:
     """
-    Optional: only works if your control plane exposes it.
+    Discover runners (read-only).
     """
-    candidates = ["/runners", "/v1/runners", "/api/runners"]
+    candidates = ["/v1/runners"]
     for p in candidates:
         code, payload = _get(p)
         if code and 200 <= code < 300:
             return {"ok": True, "endpoint": p, "status_code": code, "payload": payload}
     return {"ok": False, "endpoint": None, "status_code": 0, "payload": {"error": "no runners endpoint found"}}
+
+def fetch_openapi() -> Dict[str, Any]:
+    code, payload = _get("/openapi.json")
+    if code and 200 <= code < 300:
+        return {"ok": True, "endpoint": "/openapi.json", "status_code": code, "payload": payload}
+    return {"ok": False, "endpoint": None, "status_code": 0, "payload": {"error": "openapi not available"}}
+
