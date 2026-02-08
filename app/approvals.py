@@ -17,11 +17,11 @@ from app.approval_schema import (
     ApprovalConsumeResponse,
 )
 
+from app.world_events import emit
+
 # In-memory approval store (Phase-1)
 _STORE: Dict[str, ApprovalToken] = {}
 
-
-# ---------- helpers ----------
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -45,15 +45,8 @@ def _ttl_seconds() -> int:
         return 300
 
 
-# ---------- canonical signing ----------
-
 def _canonical_payload(token: ApprovalToken) -> bytes:
-    """
-    Canonical bytes for signing.
-    This MUST be deterministic and MUST exclude signature/status.
-    """
     parts: List[str] = []
-
     parts.append(f"token_id={token.token_id}")
     parts.append(f"nonce={token.nonce}")
     parts.append(f"issued_at={token.issued_at}")
@@ -67,8 +60,7 @@ def _canonical_payload(token: ApprovalToken) -> bytes:
             parts.append(f"scope[{i}].args.{k}={repr(scope.args[k])}")
         parts.append(f"scope[{i}].risk={scope.risk}")
 
-    canonical = "\n".join(parts)
-    return canonical.encode("utf-8")
+    return ("\n".join(parts)).encode("utf-8")
 
 
 def _sign(token: ApprovalToken) -> str:
@@ -83,8 +75,6 @@ def _is_expired(token: ApprovalToken) -> bool:
         return True
     return _now() >= exp
 
-
-# ---------- API operations ----------
 
 def request_approval(req: ApprovalRequest) -> ApprovalToken:
     issued = _now()
@@ -103,6 +93,18 @@ def request_approval(req: ApprovalRequest) -> ApprovalToken:
 
     token.signature = _sign(token)
     _STORE[token.token_id] = token
+
+    emit(
+        "approval_requested",
+        actor="approvals",
+        payload={
+            "token_id": token.token_id,
+            "proposal_id": token.proposal_id,
+            "expires_at": token.expires_at,
+            "scopes": [s.model_dump() for s in token.scopes],
+        },
+    )
+
     return token
 
 
@@ -113,7 +115,6 @@ def verify_approval(vreq: ApprovalVerifyRequest) -> ApprovalVerifyResponse:
     if stored is None:
         return ApprovalVerifyResponse(ok=False, status="INVALID", reason="Unknown token_id")
 
-    # 🔐 AUTHORITATIVE signature check (stored token only)
     try:
         expected_sig = _sign(stored)
     except Exception as e:
@@ -122,20 +123,26 @@ def verify_approval(vreq: ApprovalVerifyRequest) -> ApprovalVerifyResponse:
     if not hmac.compare_digest(expected_sig, token.signature):
         return ApprovalVerifyResponse(ok=False, status="INVALID", reason="Signature mismatch")
 
-    # Field integrity check
-    if (
-        token.nonce != stored.nonce
-        or token.issued_at != stored.issued_at
-        or token.expires_at != stored.expires_at
-    ):
+    if token.nonce != stored.nonce or token.issued_at != stored.issued_at or token.expires_at != stored.expires_at:
         return ApprovalVerifyResponse(ok=False, status="INVALID", reason="Token fields do not match issued record")
 
     if _is_expired(stored):
         stored.status = "EXPIRED"
+        _STORE[stored.token_id] = stored
         return ApprovalVerifyResponse(ok=False, status="EXPIRED", reason="Token expired", expires_at=stored.expires_at)
 
     if stored.status != "PENDING":
-        return ApprovalVerifyResponse(ok=False, status=stored.status, reason=f"Token not pending: {stored.status}")
+        return ApprovalVerifyResponse(ok=False, status=stored.status, reason=f"Token not pending: {stored.status}", expires_at=stored.expires_at)
+
+    emit(
+        "approval_verified",
+        actor="approvals",
+        payload={
+            "token_id": stored.token_id,
+            "proposal_id": stored.proposal_id,
+            "status": stored.status,
+        },
+    )
 
     return ApprovalVerifyResponse(ok=True, status="PENDING", reason="Token valid", expires_at=stored.expires_at)
 
@@ -150,12 +157,25 @@ def consume_approval(creq: ApprovalConsumeRequest) -> ApprovalConsumeResponse:
 
     if _is_expired(stored):
         stored.status = "EXPIRED"
+        _STORE[stored.token_id] = stored
         return ApprovalConsumeResponse(ok=False, status="EXPIRED", reason="Token expired")
 
     if stored.status != "PENDING":
         return ApprovalConsumeResponse(ok=False, status=stored.status, reason=f"Token not pending: {stored.status}")
 
     stored.status = "CONSUMED"
+    _STORE[stored.token_id] = stored
+
+    emit(
+        "approval_consumed",
+        actor="approvals",
+        payload={
+            "token_id": stored.token_id,
+            "proposal_id": stored.proposal_id,
+            "status": stored.status,
+        },
+    )
+
     return ApprovalConsumeResponse(ok=True, status="CONSUMED", reason="Token consumed (single-use)")
 
 

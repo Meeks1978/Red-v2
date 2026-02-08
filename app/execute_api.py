@@ -10,6 +10,7 @@ from app.approval_schema import ApprovalToken, ApprovalConsumeRequest
 from app.approvals import consume_approval
 from app.control_plane_client import execute_macro
 from app.receipts import record_receipt
+from app.world_events import emit
 
 router = APIRouter(prefix="/v1", tags=["execute"])
 
@@ -23,12 +24,21 @@ class ExecuteRequest(BaseModel):
 
 @router.post("/execute")
 def execute(req: ExecuteRequest):
-    # 1) HARD WORLD-STATE GATE
     ok, reason = can_execute()
     if not ok:
         raise HTTPException(status_code=403, detail=reason)
 
-    # 2) CONSUME APPROVAL (single-use enforcement)
+    emit(
+        "execution_requested",
+        actor="red",
+        payload={
+            "proposal_id": req.approval_token.proposal_id,
+            "token_id": req.approval_token.token_id,
+            "macro": req.macro,
+        },
+        trace_id=req.trace_id,
+    )
+
     consume = consume_approval(
         ApprovalConsumeRequest(
             token_id=req.approval_token.token_id,
@@ -36,25 +46,59 @@ def execute(req: ExecuteRequest):
         )
     )
     if not consume.ok:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Approval invalid: {consume.reason}",
+        emit(
+            "execution_failed",
+            actor="red",
+            payload={
+                "proposal_id": req.approval_token.proposal_id,
+                "token_id": req.approval_token.token_id,
+                "error": f"approval invalid: {consume.reason}",
+            },
+            trace_id=req.trace_id,
         )
+        raise HTTPException(status_code=403, detail=f"Approval invalid: {consume.reason}")
 
-    # 3) EXECUTE VIA CONTROL PLANE
     try:
         result = execute_macro(req.macro)
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Execution failed: {e}",
+        emit(
+            "execution_failed",
+            actor="red",
+            payload={
+                "proposal_id": req.approval_token.proposal_id,
+                "token_id": req.approval_token.token_id,
+                "error": str(e),
+            },
+            trace_id=req.trace_id,
         )
+        raise HTTPException(status_code=500, detail=f"Execution failed: {e}")
 
-    # 4) RECORD RECEIPT
+    emit(
+        "execution_succeeded",
+        actor="red",
+        payload={
+            "proposal_id": req.approval_token.proposal_id,
+            "token_id": req.approval_token.token_id,
+            "result_summary": {"ok": True},
+        },
+        trace_id=req.trace_id,
+    )
+
     receipt = record_receipt(
         approval_token=req.approval_token,
         macro=req.macro,
         result=result,
+    )
+
+    emit(
+        "receipt_written",
+        actor="red",
+        payload={
+            "receipt_id": receipt.get("receipt_id"),
+            "proposal_id": req.approval_token.proposal_id,
+            "token_id": req.approval_token.token_id,
+        },
+        trace_id=req.trace_id,
     )
 
     return receipt
