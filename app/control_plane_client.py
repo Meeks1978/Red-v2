@@ -1,70 +1,72 @@
 from __future__ import annotations
 
 import os
-import httpx
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional
+
+import requests
 
 
-DEFAULT_TIMEOUT = 3.0
+def _env(name: str, default: str) -> str:
+    v = os.getenv(name)
+    return v.strip() if v and v.strip() else default
 
-def control_plane_url() -> str:
-    return os.getenv("CONTROL_PLANE_URL", "http://control-plane-meeks-control-plane:8088").rstrip("/")
+
+CONTROL_PLANE_URL = _env("CONTROL_PLANE_URL", "http://meeks-control-plane:8088").rstrip("/")
 
 
-def _get(path: str) -> Tuple[int, Any]:
+class ControlPlaneClient:
+    def __init__(self, base_url: Optional[str] = None, timeout_s: float = 30.0):
+        self.base_url = (base_url or CONTROL_PLANE_URL).rstrip("/")
+        self.timeout_s = timeout_s
+
+    def execute(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        r = requests.post(f"{self.base_url}/v1/execute", json=payload, timeout=self.timeout_s)
+        # If schema fails, surface the body for debugging
+        if r.status_code >= 400:
+            raise RuntimeError(f"{r.status_code} {r.text}")
+        return r.json()
+
+
+_client = ControlPlaneClient()
+
+
+def _wrap_to_macro_request(macro: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Read-only GET helper with short timeouts.
-    Returns (status_code, json_or_text).
+    Normalize 'macro' into the Control Plane /v1/execute schema.
+
+    Accepts:
+      - already-wrapped {runner_id, action, args}
+      - {steps:[...]}  (we wrap with runner_id=ai-laptop, action=macro)
+      - {macro:{steps:[...]}} (we unwrap then wrap)
+      - empty {} -> still creates a valid macro with no steps (control plane may reject; better provide at least one step)
     """
-    url = f"{control_plane_url()}{path}"
-    try:
-        with httpx.Client(timeout=DEFAULT_TIMEOUT) as client:
-            r = client.get(url, headers={"Accept": "application/json"})
-        ct = (r.headers.get("content-type") or "").lower()
-        if "application/json" in ct:
-            return r.status_code, r.json()
-        return r.status_code, r.text
-    except Exception as e:
-        return 0, {"error": str(e), "url": url}
+    # Already looks like a control-plane request
+    if "runner_id" in macro and "action" in macro:
+        return macro
+
+    # Common wrapper
+    if "macro" in macro and isinstance(macro["macro"], dict):
+        macro = macro["macro"]
+
+    steps: List[Dict[str, Any]] = []
+    if "steps" in macro and isinstance(macro["steps"], list):
+        steps = macro["steps"]
+
+    # Default runner_id for macro envelope (matches your schema requirements)
+    runner_id = macro.get("runner_id") if isinstance(macro.get("runner_id"), str) else "ai-laptop"
+
+    return {
+        "runner_id": runner_id,
+        "action": "macro",
+        "args": {
+            "steps": steps
+        }
+    }
 
 
-def probe_health() -> Dict[str, Any]:
+def execute_macro(macro: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Try known health endpoints; return the first successful response.
+    Entry point used by execute_api.py.
     """
-    candidates = ["/health", "/healthz", "/status"]
-    for p in candidates:
-        code, payload = _get(p)
-        if code and 200 <= code < 300:
-            return {"ok": True, "endpoint": p, "status_code": code, "payload": payload}
-    return {"ok": False, "endpoint": None, "status_code": 0, "payload": {"error": "no healthy endpoint found"}}
-
-def fetch_info() -> Dict[str, Any]:
-    """
-    Try to fetch an info-like payload (optional).
-    """
-    candidates = ["/info", "/version", "/about"]
-    for p in candidates:
-        code, payload = _get(p)
-        if code and 200 <= code < 300:
-            return {"ok": True, "endpoint": p, "status_code": code, "payload": payload}
-    return {"ok": False, "endpoint": None, "status_code": 0, "payload": {"error": "no info endpoint found"}}
-
-
-def list_runners() -> Dict[str, Any]:
-    """
-    Discover runners (read-only).
-    """
-    candidates = ["/v1/runners"]
-    for p in candidates:
-        code, payload = _get(p)
-        if code and 200 <= code < 300:
-            return {"ok": True, "endpoint": p, "status_code": code, "payload": payload}
-    return {"ok": False, "endpoint": None, "status_code": 0, "payload": {"error": "no runners endpoint found"}}
-
-def fetch_openapi() -> Dict[str, Any]:
-    code, payload = _get("/openapi.json")
-    if code and 200 <= code < 300:
-        return {"ok": True, "endpoint": "/openapi.json", "status_code": code, "payload": payload}
-    return {"ok": False, "endpoint": None, "status_code": 0, "payload": {"error": "openapi not available"}}
-
+    payload = _wrap_to_macro_request(macro)
+    return _client.execute(payload)

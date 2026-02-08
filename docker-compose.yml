@@ -21,6 +21,11 @@ services:
       - APPROVAL_SIGNING_SECRET=8c7f6b9e4f2a1d3c9a0e5b7d2f4c8e1a
       - APPROVAL_TOKEN_TTL_SEC=300
 
+    pipelines:
+      image: ghcr.io/open-webui/pipelines:main
+      volumes:
+        - /opt/openwebui/pipelines:/app/pipelines
+
 networks:
   openwebui_meeks:
     external: true
