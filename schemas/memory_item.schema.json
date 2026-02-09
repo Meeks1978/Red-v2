@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "required": ["scope", "kind", "text", "source", "trace_id"],
+  "properties": {
+    "scope": { "enum": ["canonical", "ops", "semantic"] },
+    "kind": { "enum": ["fact", "event", "receipt", "doc_ref", "note"] },
+    "text": { "type": "string" },
+    "key": { "type": "string" },
+    "source": { "enum": ["user", "system", "runner", "doc", "import"] },
+    "confidence": { "type": "number" },
+    "trace_id": { "type": "string" }
+  }
+}

@@ -17,6 +17,7 @@ services:
       - ALLOW_SHELL_EXEC=false
       - ALLOW_UI_AUTOMATION=false
       - ALLOW_DOCKER_CONTROL=false
+      - RED_MEMORY_URL=http://red-memory:8092
       - CONTROL_PLANE_URL=http://meeks-control-plane:8088
       - APPROVAL_SIGNING_SECRET=8c7f6b9e4f2a1d3c9a0e5b7d2f4c8e1a
       - APPROVAL_TOKEN_TTL_SEC=300
