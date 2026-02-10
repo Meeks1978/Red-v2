@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from fastapi import FastAPI
+from red.app.routers.meta import router as meta_router
+
+app = FastAPI()
+app.include_router(meta_router)
 
 from app import approvals_api
 from app import state_api
