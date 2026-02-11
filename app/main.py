@@ -107,3 +107,20 @@ def health_runtime():
         "runtime": getattr(ServiceContainer, "runtime", {}),
         "semantic_breaker": (br.snapshot() if br is not None else None),
     }
+
+# --- 9-engine scaffold APIs ---
+from app.api.advisory_api import router as advisory_router
+from app.api.planning_api import router as planning_router
+from app.api.observer_api import router as observer_engine_router
+from app.api.world_api import router as world_engine_router
+from app.api.upgrades_api import router as upgrades_router
+
+app.include_router(advisory_router)
+app.include_router(planning_router)
+app.include_router(observer_engine_router)
+app.include_router(world_engine_router)
+app.include_router(upgrades_router)
+
+# --- Orchestrator API ---
+from app.api.orchestrator_api import router as orchestrator_router
+app.include_router(orchestrator_router)
