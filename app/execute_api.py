@@ -102,3 +102,34 @@ def execute(req: ExecuteRequest):
     )
 
     return receipt
+
+# --- BU-3 Memory Ingestion Hook (execute results) ---
+from app.services.container import ServiceContainer
+
+def _ingest_execute_memory(trace_id: str, response_json: dict) -> None:
+    try:
+        curator = ServiceContainer.memory_curator
+
+        status_code = response_json.get("status_code")
+        ok = response_json.get("ok", False)
+
+        confidence = 0.75 if ok else 0.4
+
+        curator.ingest(
+            namespace="execute",
+            key=f"trace:{trace_id}" if trace_id else "trace:unknown",
+            value={
+                "status_code": status_code,
+                "ok": ok,
+                "summary": response_json.get("detail") or response_json.get("result")
+            },
+            source_kind="receipt",
+            source_ref=trace_id or "unknown",
+            confidence=confidence,
+            tags=["execute", "receipt"],
+            tier="working"
+        )
+    except Exception as e:
+        # Silent by design (Phase-0 hygiene)
+        print({"memory_ingest_error": str(e)})
+

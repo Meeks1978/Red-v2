@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
-from red.app.types.core import Receipt, Confidence
-from red.app.governance.uncertainty_gate import GateDecision
-from red.app.types.core import new_id
+from app.types.core import Receipt, Confidence
+from app.governance.uncertainty_gate import GateDecision
+from app.types.core import new_id
 
 
 @dataclass

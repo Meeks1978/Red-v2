@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, Optional
 
-from red.app.world.types import WorldFact, WorldSnapshot, new_id, now_ms
+from app.world.types import WorldFact, WorldSnapshot, new_id, now_ms
 
 
 class WorldStore:

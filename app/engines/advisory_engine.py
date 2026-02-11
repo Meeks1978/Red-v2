@@ -3,20 +3,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from red.app.contracts.intent import Intent, Plan, SuccessCriteria
-from red.app.services.intent_outcome import (
+from app.contracts.intent import Intent, Plan, SuccessCriteria
+from app.services.intent_outcome import (
     IntentOutcomeTracker,
     SuccessCriteriaEvaluator,
     PostIntentReflection,
 )
-from red.app.trust.surface import TrustSurfaceBuilder, ReasonSurface
-from red.app.types.core import Confidence
+from app.trust.surface import TrustSurfaceBuilder, ReasonSurface
+from app.types.core import Confidence
 
 # BU-2 imports
-from red.app.governance.assumptions import Assumption
-from red.app.governance.assumption_verifier import AssumptionVerifier
-from red.app.governance.uncertainty_gate import UncertaintyGate, GateDecision
-from red.app.world.drift import DriftEvent
+from app.governance.assumptions import Assumption
+from app.governance.assumption_verifier import AssumptionVerifier
+from app.governance.uncertainty_gate import UncertaintyGate, GateDecision
+from app.world.drift import DriftEvent
 
 
 @dataclass

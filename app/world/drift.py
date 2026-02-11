@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
-from red.app.world.types import WorldFact
+from app.world.types import WorldFact
 
 
 @dataclass(frozen=True)

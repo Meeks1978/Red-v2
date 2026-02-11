@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from red.app.types.core import Confidence
+from app.types.core import Confidence
 
 
 @dataclass(frozen=True)

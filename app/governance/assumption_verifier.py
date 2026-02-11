@@ -3,8 +3,8 @@ from __future__ import annotations
 import time
 from typing import List
 
-from red.app.governance.assumptions import Assumption, AssumptionStatus
-from red.app.world.drift import DriftEvent
+from app.governance.assumptions import Assumption, AssumptionStatus
+from app.world.drift import DriftEvent
 
 
 class AssumptionVerifier:

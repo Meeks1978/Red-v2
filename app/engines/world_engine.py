@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Dict, Any, List
 
-from red.app.world.store import WorldStore
-from red.app.world.staleness import StalenessMonitor
-from red.app.world.trust_weighting import SensorTrustWeighting
-from red.app.world.drift import WorldDriftDetector, DriftEvent
-from red.app.world.types import WorldFact
+from app.world.store import WorldStore
+from app.world.staleness import StalenessMonitor
+from app.world.trust_weighting import SensorTrustWeighting
+from app.world.drift import WorldDriftDetector, DriftEvent
+from app.world.types import WorldFact
 
 
 class WorldEngine:

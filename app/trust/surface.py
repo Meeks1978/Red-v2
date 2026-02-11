@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional
 
-from red.app.types.core import Confidence
-from red.app.governance.assumptions import Assumption, AssumptionStatus
-from red.app.governance.uncertainty_gate import GateDecision
-from red.app.world.drift import DriftEvent
+from app.types.core import Confidence
+from app.governance.assumptions import Assumption, AssumptionStatus
+from app.governance.uncertainty_gate import GateDecision
+from app.world.drift import DriftEvent
 
 
 @dataclass(frozen=True)

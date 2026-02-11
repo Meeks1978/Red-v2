@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List
 
-from red.app.world.types import WorldFact
+from app.world.types import WorldFact
 
 
 class StalenessMonitor:

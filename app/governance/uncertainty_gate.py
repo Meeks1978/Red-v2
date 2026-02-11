@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List
 
-from red.app.governance.assumptions import Assumption, AssumptionStatus
-from red.app.types.core import Confidence
+from app.governance.assumptions import Assumption, AssumptionStatus
+from app.types.core import Confidence
 
 
 @dataclass(frozen=True)

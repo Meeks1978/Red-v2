@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from red.app.world.types import WorldFact
+from app.world.types import WorldFact
 
 
 class SensorTrustWeighting:
