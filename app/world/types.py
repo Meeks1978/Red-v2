@@ -1,50 +1,110 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Literal
+from pydantic import BaseModel, Field
 import time
-import uuid
-
 
 def now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def new_id(prefix: str) -> str:
-    return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
-
-@dataclass(frozen=True)
-class Source:
-    """
-    Where a fact came from.
-    """
-    source_id: str
-    kind: str            # sensor | human | inference | memory
-    trust: float         # 0.0 - 1.0 baseline trust
-
-
-@dataclass
-class WorldFact:
-    fact_id: str
-    key: str
-    value: Any
-    observed_at_ms: int
-    source: Source
-    ttl_ms: Optional[int] = None
-
-    def age_ms(self) -> int:
-        return now_ms() - self.observed_at_ms
-
-    def is_stale(self) -> bool:
-        return self.ttl_ms is not None and self.age_ms() > self.ttl_ms
-
-
-@dataclass
-class WorldSnapshot:
-    """
-    Point-in-time view of the world.
-    """
-    snapshot_id: str
+class WorldEntity(BaseModel):
+    entity_id: str
+    kind: str = "generic"
+    attrs: Dict[str, Any] = Field(default_factory=dict)
+    confidence: float = 0.5
     created_at_ms: int
-    facts: Dict[str, WorldFact] = field(default_factory=dict)
+    updated_at_ms: int
+    last_seen_ms: int
+
+
+class WorldEvent(BaseModel):
+    ts_ms: int
+    kind: str
+    entity_id: Optional[str] = None
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    trace_id: Optional[str] = None
+    source: str = "world"
+    confidence: float = 0.5
+
+
+class Snapshot(BaseModel):
+    ok: bool = True
+    store_path: str
+    entity_count: int
+    event_count: int
+    last_event_ts: Optional[int] = None
+    stale_entity_count: int = 0
+
+
+class UpsertEntityRequest(BaseModel):
+    entity_id: str
+    kind: str = "generic"
+    attrs: Dict[str, Any] = Field(default_factory=dict)
+    confidence: float = 0.5
+    seen: bool = True
+    ts_ms: Optional[int] = None
+
+
+class EmitEventRequest(BaseModel):
+    kind: str
+    entity_id: Optional[str] = None
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    trace_id: Optional[str] = None
+    confidence: float = 0.5
+    ts_ms: Optional[int] = None
+    source: str = "world"
+
+
+
+# --- WorldRelation (added for BU-4 store compatibility) ---
+
+class WorldRelation(BaseModel):
+    """
+    Minimal relationship edge between two entities.
+    Keep stable: JSON-serializable, schema-light, no side effects.
+    """
+    src_id: str
+    dst_id: str
+    rel: str = "related_to"
+    attrs: Dict[str, Any] = Field(default_factory=dict)
+    confidence: float = 0.5
+    ts_ms: Optional[int] = None
+
+class UpsertRelationRequest(BaseModel):
+    src_id: str
+    dst_id: str
+    rel: str = "related_to"
+    attrs: Dict[str, Any] = Field(default_factory=dict)
+    confidence: float = 0.5
+    ts_ms: Optional[int] = None
+
+class ListRelationsResponse(BaseModel):
+    ok: bool = True
+    since_ms: Optional[int] = None
+    limit: int = 100
+    relations: List[WorldRelation] = Field(default_factory=list)
+
+class ListEventsResponse(BaseModel):
+    ok: bool = True
+    since_ms: Optional[int] = None
+    limit: int = 100
+    events: List[WorldEvent] = Field(default_factory=list)
+
+
+class ListEntitiesResponse(BaseModel):
+    ok: bool = True
+    entities: List[WorldEntity] = Field(default_factory=list)
+
+
+class ProbeRequest(BaseModel):
+    kind: Literal["snapshot", "staleness", "drift"] = "snapshot"
+    limit: int = 50
+    stale_after_ms: int = 6 * 60 * 60 * 1000  # 6h default
+
+
+class ProbeResponse(BaseModel):
+    ok: bool = True
+    kind: str
+    data: Dict[str, Any] = Field(default_factory=dict)

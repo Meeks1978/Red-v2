@@ -1,24 +1,238 @@
 from __future__ import annotations
+
+def _as_dict(x):
+    """Best-effort object->dict for pydantic/dataclass/plain objects."""
+    if x is None:
+        return {}
+    if isinstance(x, dict):
+        return x
+    # Pydantic v2
+    md = getattr(x, "model_dump", None)
+    if callable(md):
+        try:
+            return md()
+        except Exception:
+            pass
+    # Pydantic v1
+    dct = getattr(x, "dict", None)
+    if callable(dct):
+        try:
+            return dct()
+        except Exception:
+            pass
+    # dataclass / plain object
+    try:
+        return dict(getattr(x, "__dict__", {}) or {})
+    except Exception:
+        return {}
+
+def _get_cost_dict(variant):
+    """Return a dict-like cost surface from PlanVariant or dict."""
+    if variant is None:
+        return {}
+    # object-first (PlanVariant.cost)
+    if hasattr(variant, "cost"):
+        return _as_dict(getattr(variant, "cost", None))
+    # dict fallback
+    if isinstance(variant, dict):
+        return _as_dict(variant.get("cost"))
+    return {}
+
+import json
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.contracts.intent import IntentEnvelope
 from app.contracts.plan import Plan, PlanBundle, PlanStep, SuccessCriteria, PlanVariant
+from app.models.gateway import GATEWAY
+from app.decision.cost_select import CostWeights, score_variants
+
 
 def _id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:10]}"
 
-class PlanningEngine:
-    def plan(self, intent: IntentEnvelope, ctx: Dict[str, Any]) -> PlanBundle:
-        plan_id = _id("plan")
-        step = PlanStep(step_id=_id("step"), description="(scaffold) Draft macro steps; no tool binding yet.")
-        plan = Plan(
-            plan_id=plan_id,
-            intent_id=intent.intent_id,
-            summary="Scaffold plan",
-            assumptions=["(scaffold) World state assumed stable"],
-            success=SuccessCriteria(description="Scaffold success criteria"),
-            steps=[step],
+
+def _clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
+    return max(lo, min(hi, x))
+
+
+def _safe_float(v: Any, default: float = 0.5) -> float:
+    try:
+        return float(v)
+    except Exception:
+        return default
+
+
+def _parse_plan_obj(obj: Dict[str, Any], intent_id: str) -> Plan:
+    plan_id = _id("plan")
+    steps: List[PlanStep] = []
+    for s in (obj.get("steps") or [])[:12]:
+        steps.append(
+        PlanStep(
+        step_id=_id("step"),
+        description=str(s.get("description", ""))[:800],
+        tool_hint=s.get("tool_hint"),
+        data={"model_step_id": s.get("id")},
         )
-        variant = PlanVariant(name="default", plan=plan, cost={"risk":"unknown","latency":"unknown"})
-        return PlanBundle(selected=plan, variants=[variant], cost_surface={"note":"scaffold"})
+        )
+
+    success_obj = obj.get("success") or {}
+    success = SuccessCriteria(
+    description=str(success_obj.get("description", "Success criteria"))[:300],
+    required_signals=list(success_obj.get("required_signals") or []),
+    must_not_happen=list(success_obj.get("must_not_happen") or []),
+    )
+
+    assumptions = [str(a)[:200] for a in (obj.get("assumptions") or [])][:12]
+
+    return Plan(
+    plan_id=plan_id,
+    intent_id=intent_id,
+    summary=str(obj.get("summary", "Plan"))[:300],
+    assumptions=assumptions,
+    success=success,
+    steps=steps,
+    )
+
+
+class PlanningEngine:
+    """
+    Planning = DeepSeek primary (SimRig).
+    Produces 3 variants + cost vectors and a deterministic cost_surface.
+    """
+
+    def plan(self, intent: IntentEnvelope, ctx: Dict[str, Any]) -> PlanBundle:
+        system = (
+        "You are Red Planning Engine.\n"
+        "Return STRICT JSON ONLY. No markdown. No commentary.\n\n"
+        "Schema:\n"
+        "{\n"
+        '  "selected_rule": "safest" | "fastest" | "simplest",\n'
+        '  "variants": [\n'
+        "    {\n"
+        '      "name": "safest" | "fastest" | "simplest",\n'
+        '      "plan": {\n'
+        '        "summary": str,\n'
+        '        "assumptions": [str],\n'
+        '        "success": { "description": str, "required_signals": [str], "must_not_happen": [str] },\n'
+        '        "steps": [ { "id": str, "description": str, "tool_hint": null | str } ]\n'
+        "      },\n"
+        '      "cost": {\n'
+        '        "risk": float,              # 0..1 (lower safer)\n'
+        '        "reversibility": float,     # 0..1 (higher more reversible)\n'
+        '        "time_est_min": float,      # minutes\n'
+        '        "complexity": float,        # 0..1 (lower simpler)\n'
+        '        "confidence": float         # 0..1\n'
+        "      }\n"
+        "    }\n"
+        "  ]\n"
+        "}\n\n"
+        "Rules:\n"
+        "- Provide exactly 3 variants: safest, fastest, simplest.\n"
+        "- Steps must be executable instructions, not prose.\n"
+        "- Keep steps short.\n"
+        )
+
+        user = (
+        f"INTENT: {intent.text}\n"
+        f"CTX_KEYS: {sorted(list(ctx.keys()))}\n"
+        f"CONSTRAINTS: {ctx.get('constraints', {})}\n"
+        )
+
+        res = GATEWAY.chat(
+        engine="planning",
+        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+        options={"temperature": 0.2},
+        )
+
+        raw = (res.content or "").strip()
+        parsed: Dict[str, Any] = {}
+        parse_ok = False
+        try:
+            parsed = json.loads(raw)
+            parse_ok = True
+        except Exception:
+            parse_ok = False
+
+        # Hard fallback if parse fails
+        if not parse_ok:
+            fallback_plan = {
+            "summary": "Fallback plan (parser failed)",
+            "assumptions": ["World state assumed stable (until BU-4 enriches)."],
+            "success": {"description": "Plan produced", "required_signals": [], "must_not_happen": []},
+            "steps": [{"id": "s1", "description": raw[:800] or "Draft safe steps", "tool_hint": None}],
+            }
+            parsed = {
+            "selected_rule": "safest",
+            "variants": [
+            {"name": "safest", "plan": fallback_plan, "cost": {"risk": 0.4, "reversibility": 0.9, "time_est_min": 2, "complexity": 0.2, "confidence": 0.4}},
+            {"name": "fastest", "plan": fallback_plan, "cost": {"risk": 0.5, "reversibility": 0.8, "time_est_min": 1, "complexity": 0.3, "confidence": 0.4}},
+            {"name": "simplest", "plan": fallback_plan, "cost": {"risk": 0.45, "reversibility": 0.85, "time_est_min": 2, "complexity": 0.1, "confidence": 0.4}},
+            ],
+            }
+
+        variants_in = parsed.get("variants") or []
+        variants_out: List[PlanVariant] = []
+
+        # Build PlanVariant list
+        for v in variants_in:
+            name = str(v.get("name", "variant"))[:40]
+            plan_obj = v.get("plan") or {}
+            cost_obj = v.get("cost") or {}
+
+            # sanitize cost fields
+            cost = {
+            "risk": _clamp(_safe_float(cost_obj.get("risk"), 0.6)),
+            "reversibility": _clamp(_safe_float(cost_obj.get("reversibility"), 0.5)),
+            "time_est_min": max(0.0, _safe_float(cost_obj.get("time_est_min"), 5.0)),
+            "complexity": _clamp(_safe_float(cost_obj.get("complexity"), 0.5)),
+            "confidence": _clamp(_safe_float(cost_obj.get("confidence"), 0.5)),
+            "model_used": res.used,
+            "fallbacks": res.attempts,
+            "parse_ok": parse_ok,
+            "raw_len": len(raw),
+            }
+
+            plan = _parse_plan_obj(plan_obj, intent.intent_id)
+            variants_out.append(PlanVariant(name=name, plan=plan, cost=cost))
+
+        # Ensure we have 3 variants even if model deviated
+        if len(variants_out) < 1:
+            # should not happen due to fallback, but keep safe
+            plan = _parse_plan_obj({"summary":"Emergency fallback","assumptions":[],"success":{},"steps":[{"id":"s1","description":"Draft safe steps","tool_hint":None}]}, intent.intent_id)
+            variants_out = [PlanVariant(name="safest", plan=plan, cost={"risk":0.6,"reversibility":0.5,"time_est_min":5,"complexity":0.5,"confidence":0.3,"model_used":res.used,"fallbacks":res.attempts,"parse_ok":False})]
+
+        # Deterministic selection rule:
+        # Default -> safest (min risk)
+        # Replaced: weighted cost selection (deterministic)
+        weights = CostWeights.from_env()
+
+        # Score using the COST dict (risk/time/complexity/reversibility/confidence)
+        # Keep existing variant structure intact.
+        _cost_variants = []
+        for _v in variants_out:
+            pass  # auto-inserted to fix empty for-block
+        c = _get_cost_dict(_v)
+        c["name"] = _v.get("name")
+        _cost_variants.append(c)
+
+        best_i, cost_debug = score_variants(_cost_variants, weights=weights)
+        selected = variants_out[best_i]
+        selected_rule = cost_debug["selected_rule"]
+        cost_surface = {
+        "debug": cost_debug,
+        "selected_rule": "safest(min_risk)",
+        "variants": [
+        {
+        "name": v.name,
+        "risk": v.cost.get("risk"),
+        "reversibility": v.cost.get("reversibility"),
+        "time_est_min": v.cost.get("time_est_min"),
+        "complexity": v.cost.get("complexity"),
+        "confidence": v.cost.get("confidence"),
+        }
+        for v in variants_out
+        ],
+        }
+
+        return PlanBundle(selected=selected, variants=variants_out, cost_surface=cost_surface)

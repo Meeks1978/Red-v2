@@ -1,84 +1,190 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional
+import time
+import uuid
 
-from app.types.core import Confidence, Receipt
+
+def now_ms() -> int:
+    return int(time.time() * 1000)
 
 
 @dataclass
-class IntentOutcomeRecord:
+class IntentRecord:
+    """
+    Minimal durable intent record.
+    This is intentionally conservative and does not depend on any other modules.
+    """
     intent_id: str
-    plan_id: Optional[str] = None
-    step_receipts: List[Receipt] = field(default_factory=list)
-    final_state: Dict[str, Any] = field(default_factory=dict)
-    success: Optional[bool] = None
-    confidence: Confidence = Confidence(0.5, "unscored")
-    postmortem: str = ""
+    trace_id: str
+    text: str
+    created_at_ms: int
+    updated_at_ms: int
 
+    status: str = "open"  # open|closed
+    ok: Optional[bool] = None
+    summary: Optional[str] = None
+    confidence: Optional[float] = None
+    postmortem: Optional[str] = None
 
-class IntentOutcomeTracker:
-    """
-    Canonical closure object:
-      intent -> plan -> step receipts -> final state -> success -> reflection
-    """
-    def __init__(self) -> None:
-        self._records: Dict[str, IntentOutcomeRecord] = {}
+    required_signals: List[str] = None
+    must_not_happen: List[str] = None
 
-    def start(self, intent_id: str) -> IntentOutcomeRecord:
-        rec = IntentOutcomeRecord(intent_id=intent_id)
-        self._records[intent_id] = rec
-        return rec
+    final_state: Dict[str, Any] = None
+    receipts: List[Dict[str, Any]] = None
+    evaluation: Dict[str, Any] = None
 
-    def link_plan(self, intent_id: str, plan_id: str) -> None:
-        self._records.setdefault(intent_id, IntentOutcomeRecord(intent_id=intent_id)).plan_id = plan_id
-
-    def add_receipt(self, intent_id: str, receipt: Receipt) -> None:
-        self._records.setdefault(intent_id, IntentOutcomeRecord(intent_id=intent_id)).step_receipts.append(receipt)
-
-    def set_final_state(self, intent_id: str, final_state: Dict[str, Any]) -> None:
-        self._records.setdefault(intent_id, IntentOutcomeRecord(intent_id=intent_id)).final_state = final_state
-
-    def set_result(self, intent_id: str, success: bool, confidence: Confidence, postmortem: str = "") -> None:
-        rec = self._records.setdefault(intent_id, IntentOutcomeRecord(intent_id=intent_id))
-        rec.success = success
-        rec.confidence = confidence
-        rec.postmortem = postmortem
-
-    def get(self, intent_id: str) -> Optional[IntentOutcomeRecord]:
-        return self._records.get(intent_id)
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        # dataclasses default handling
+        d["required_signals"] = d["required_signals"] or []
+        d["must_not_happen"] = d["must_not_happen"] or []
+        d["final_state"] = d["final_state"] or {}
+        d["receipts"] = d["receipts"] or []
+        d["evaluation"] = d["evaluation"] or {}
+        return d
 
 
 class SuccessCriteriaEvaluator:
     """
-    Evaluates SuccessCriteria against final_state + receipts.
-    Keep deterministic and auditable.
+    Placeholder evaluator. Returns a structured result, but does not enforce policy.
+    You can harden this later (BU-2/BU-6), without changing storage.
     """
-    def evaluate(self, *, required_signals: List[str], must_not_happen: List[str], final_state: Dict[str, Any]) -> bool:
-        signals = set(final_state.get("signals", []))
-        for r in required_signals:
-            if r not in signals:
-                return False
-        for b in must_not_happen:
-            if b in signals:
-                return False
-        return True
+    def evaluate(
+        self,
+        *,
+        required_signals: List[str],
+        must_not_happen: List[str],
+        final_state: Dict[str, Any],
+        receipts: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        required_signals = required_signals or []
+        must_not_happen = must_not_happen or []
+
+        missing_required = [s for s in required_signals if not final_state.get(s)]
+        violated_forbidden = [s for s in must_not_happen if final_state.get(s)]
+
+        ok = (len(missing_required) == 0) and (len(violated_forbidden) == 0)
+
+        return {
+            "ok": ok,
+            "missing_required": missing_required,
+            "violated_forbidden": violated_forbidden,
+            "receipts_count": len(receipts or []),
+        }
 
 
 class PostIntentReflection:
     """
-    Generates postmortem and updated confidence.
-    No side-effects here; memory updates happen in Memory Curator.
+    Placeholder. Produces a short postmortem string and confidence.
     """
-    def reflect(self, *, success: bool, receipts: List[Receipt], final_state: Dict[str, Any]) -> tuple[Confidence, str]:
-        if success:
-            conf = Confidence(0.85, "success criteria satisfied")
-            note = "Succeeded. Receipts indicate expected signals were produced."
-        else:
-            # downweight confidence when receipts show errors
-            had_error = any((not r.ok) for r in receipts)
-            score = 0.35 if had_error else 0.45
-            rationale = "failure with execution errors" if had_error else "failure without explicit execution error"
-            conf = Confidence(score, rationale)
-            note = "Failed. Inspect receipts and final_state for missing signals or blocked gates."
-        return conf, note
+    def reflect(self, *, ok: bool, eval_result: Dict[str, Any]) -> Dict[str, Any]:
+        if ok:
+            return {
+                "postmortem": "SUCCESS | missing_required=[] violated_forbidden=[]",
+                "confidence": 0.8,
+            }
+        return {
+            "postmortem": f"FAIL | missing_required={eval_result.get('missing_required', [])} "
+                          f"violated_forbidden={eval_result.get('violated_forbidden', [])}",
+            "confidence": 0.2,
+        }
+
+
+class IntentOutcomeTracker:
+    """
+    Minimal intent tracker used by /v1/intent/*.
+    Uses an internal in-memory map. This unblocks boot deterministically.
+    Later you can swap persistence behind this without changing API shape.
+    """
+    def __init__(
+        self,
+        evaluator: Optional[SuccessCriteriaEvaluator] = None,
+        reflector: Optional[PostIntentReflection] = None,
+    ) -> None:
+        self._db: Dict[str, IntentRecord] = {}
+        self._evaluator = evaluator or SuccessCriteriaEvaluator()
+        self._reflector = reflector or PostIntentReflection()
+
+    def start(
+        self,
+        *,
+        text: str,
+        trace_id: Optional[str] = None,
+        required_signals: Optional[List[str]] = None,
+        must_not_happen: Optional[List[str]] = None,
+    ) -> IntentRecord:
+        tid = trace_id or f"trace_{uuid.uuid4().hex[:10]}"
+        intent_id = f"intent_{uuid.uuid4().hex[:10]}"
+        t = now_ms()
+        rec = IntentRecord(
+            intent_id=intent_id,
+            trace_id=tid,
+            text=text,
+            created_at_ms=t,
+            updated_at_ms=t,
+            required_signals=required_signals or [],
+            must_not_happen=must_not_happen or [],
+            final_state={},
+            receipts=[],
+            evaluation={},
+        )
+        self._db[intent_id] = rec
+        return rec
+
+    def close(
+        self,
+        *,
+        intent_id: str,
+        ok: bool,
+        final_state: Optional[Dict[str, Any]] = None,
+        receipts: Optional[List[Dict[str, Any]]] = None,
+        summary: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        rec = self._db.get(intent_id)
+        if not rec:
+            return {"ok": False, "error": "intent_id_not_found", "intent_id": intent_id}
+
+        rec.status = "closed"
+        rec.updated_at_ms = now_ms()
+        rec.final_state = final_state or {}
+        rec.receipts = receipts or []
+        rec.summary = summary or rec.summary
+        rec.ok = bool(ok)
+
+        eval_result = self._evaluator.evaluate(
+            required_signals=rec.required_signals or [],
+            must_not_happen=rec.must_not_happen or [],
+            final_state=rec.final_state or {},
+            receipts=rec.receipts or [],
+        )
+        rec.evaluation = eval_result
+        refl = self._reflector.reflect(ok=rec.ok, eval_result=eval_result)
+        rec.postmortem = refl.get("postmortem")
+        rec.confidence = float(refl.get("confidence", 0.5))
+
+        return {"ok": True, "intent": rec.to_dict()}
+
+    def open(self, *, limit: int = 20) -> List[Dict[str, Any]]:
+        out = [r.to_dict() for r in self._db.values() if r.status == "open"]
+        out.sort(key=lambda x: x.get("created_at_ms", 0), reverse=True)
+        return out[: max(1, int(limit))]
+
+    def stats(self) -> Dict[str, Any]:
+        open_count = sum(1 for r in self._db.values() if r.status == "open")
+        closed_count = sum(1 for r in self._db.values() if r.status == "closed")
+        ok_count = sum(1 for r in self._db.values() if r.status == "closed" and r.ok is True)
+        return {"open": open_count, "closed": closed_count, "ok": ok_count}
+
+
+
+# Back-compat alias (older imports expect IntentOutcomeStore)
+IntentOutcomeStore = IntentOutcomeTracker
+__all__ = [
+        "IntentOutcomeStore",
+"IntentOutcomeTracker",
+    "SuccessCriteriaEvaluator",
+    "PostIntentReflection",
+    "IntentRecord",
+]

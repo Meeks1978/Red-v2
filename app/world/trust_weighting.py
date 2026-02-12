@@ -1,24 +1,27 @@
 from __future__ import annotations
 
-from app.world.types import WorldFact
+from typing import Any, Dict
 
 
-class SensorTrustWeighting:
+class SensorTrustWeights:
     """
-    Adjust effective trust based on source kind + age.
+    Placeholder for BU-4/Phase-7 sensor trust weighting.
+    Keep simple: static weights by source.
     """
-    def effective_trust(self, fact: WorldFact) -> float:
-        base = fact.source.trust
 
-        # decay trust over time (simple linear decay)
-        age_sec = fact.age_ms() / 1000.0
-        decay = min(age_sec / 3600.0, 0.5)  # max 50% decay over 1 hour+
+    def __init__(self) -> None:
+        self.weights: Dict[str, float] = {
+            "world": 0.8,
+            "execute": 0.9,
+            "manual": 0.7,
+            "unknown": 0.5,
+        }
 
-        kind_bias = {
-            "sensor": 0.0,
-            "human": 0.1,
-            "inference": -0.1,
-            "memory": -0.2,
-        }.get(fact.source.kind, 0.0)
+    def weight(self, source: str) -> float:
+        try:
+            return float(self.weights.get(source or "unknown", 0.5))
+        except Exception:
+            return 0.5
 
-        return max(0.0, min(1.0, base + kind_bias - decay))
+    def report(self) -> Dict[str, Any]:
+        return {"ok": True, "weights": dict(self.weights)}

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.intent_outcome import IntentOutcomeStore
 import os
 
 from app.engines.advisory_engine import AdvisoryEngine
@@ -7,6 +8,9 @@ from app.trust.surface import TrustSurfaceBuilder
 
 
 class ServiceContainer:
+    # BU-1: Intent→Outcome closure store (durable)
+    intent_store_path = os.getenv("INTENT_STORE_PATH", "/red/data/intents.json")
+    intent_tracker = IntentOutcomeStore(intent_store_path)
     """
     Simple DI container. Replace with your existing wiring if you have one.
     """
@@ -116,3 +120,17 @@ if not hasattr(ServiceContainer, "semantic_breaker"):
             cooldown_sec=int(os.getenv("SEMANTIC_CB_COOLDOWN_SEC", "300")),
         )
     )
+
+# --- Intent -> Outcome Closure (BU-1/Phase-7 missing function) ---
+from app.intent.outcome_tracker import IntentOutcomeTracker
+from app.intent.success_evaluator import SuccessCriteriaEvaluator
+from app.intent.reflection import PostIntentReflection
+
+if not hasattr(ServiceContainer, "intent_tracker"):
+    ServiceContainer.intent_tracker = IntentOutcomeTracker()
+
+if not hasattr(ServiceContainer, "success_evaluator"):
+    ServiceContainer.success_evaluator = SuccessCriteriaEvaluator()
+
+if not hasattr(ServiceContainer, "post_reflection"):
+    ServiceContainer.post_reflection = PostIntentReflection()

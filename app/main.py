@@ -28,11 +28,13 @@ from app.memory.routes import router as memory_router
 from app.observer.control import start_shadow_observer
 from app.observer.middleware import ShadowObserverMiddleware
 from app.memory.ingest_middleware import MemoryIngestMiddleware
+from app.world.snapshot_api import router as world_snapshot_router
 
 
 app = FastAPI(title="Red v2", version="2.0.0")
 
 # Meta
+app.include_router(world_snapshot_router)
 app.include_router(meta_router)
 
 # Core
@@ -124,3 +126,17 @@ app.include_router(upgrades_router)
 # --- Orchestrator API ---
 from app.api.orchestrator_api import router as orchestrator_router
 app.include_router(orchestrator_router)
+
+# --- ModelGateway status API ---
+from app.api.models_api import router as models_router
+app.include_router(models_router)
+
+# --- Intent->Outcome API ---
+from app.api.intent_api import router as intent_router
+app.include_router(intent_router)
+
+# --- BU-1 Copilot Router ---
+from red.copilot.api import router as copilot_router
+app.include_router(copilot_router)
+# --- End BU-1 Copilot Router ---
+

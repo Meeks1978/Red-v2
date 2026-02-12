@@ -13,7 +13,7 @@ class ReasonReq(BaseModel):
 
 @router.post("/reason")
 def reason(req: ReasonReq):
-    out = ENGINES.orchestrator.reason_only(req.text, trace_id=req.trace_id)
+    out = ENGINES.orchestrator.reason(req.text, trace_id=req.trace_id)
     return {"ok": out.ok, "trace_id": out.trace_id, "out": out}
 
 class ActReq(BaseModel):
@@ -24,10 +24,5 @@ class ActReq(BaseModel):
 
 @router.post("/act")
 def act(req: ActReq):
-    out = ENGINES.orchestrator.act(
-        req.text,
-        trace_id=req.trace_id,
-        execute=req.execute,
-        approval_token=req.approval_token,
-    )
+    out = ENGINES.orchestrator.act(req.text, execute=req.execute, trace_id=req.trace_id, approval_token=req.approval_token)
     return {"ok": out.ok, "trace_id": out.trace_id, "out": out}
