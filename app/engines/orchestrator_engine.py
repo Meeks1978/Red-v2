@@ -1,5 +1,31 @@
 from __future__ import annotations
 
+def _get_state_string() -> str:
+    """
+    Best-effort read of governance state.
+    Must NEVER raise. Default to UNKNOWN (fail-closed).
+    """
+    try:
+        # Common place in this repo: hard gate logic used by /v1/execute
+        from app.world_state import get_state as _get_state  # type: ignore
+        st = _get_state()
+        if isinstance(st, dict):
+            v = st.get("state") or st.get("mode") or st.get("value")
+            if isinstance(v, str) and v:
+                return v
+    except Exception:
+        pass
+    try:
+        # Alternate: state store object
+        from app.world_state import STATE as _STATE  # type: ignore
+        if hasattr(_STATE, "get"):
+            v = _STATE.get("state")  # type: ignore
+            if isinstance(v, str) and v:
+                return v
+    except Exception:
+        pass
+    return "UNKNOWN"
+
 import time
 import uuid
 from dataclasses import dataclass
@@ -119,6 +145,25 @@ class OrchestratorEngine:
     def act(self, text: str, *, execute: bool = False, approval_token: Optional[Dict[str, Any]] = None, trace_id: Optional[str] = None) -> OrchestrationOutput:
         base = self.reason(text, trace_id=trace_id)
         if not execute:
+            return base
+
+        # --- BU-5 HARD STATE GATE ---
+        # Execution is ONLY allowed in ARMED_ACTIVE (fail-closed).
+        try:
+            _state = _get_state_string()
+        except Exception:
+            _state = "UNKNOWN"
+        if _state != "ARMED_ACTIVE":
+            base.ok = False
+            try:
+                base.reason_surface.reason = f"Execution blocked: state={_state} (requires ARMED_ACTIVE)."
+            except Exception:
+                pass
+            try:
+                base.debug["blocked"] = "state_not_active"
+                base.debug["state"] = _state
+            except Exception:
+                pass
             return base
 
         # Execution gating (kept strict)

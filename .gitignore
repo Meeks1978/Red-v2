@@ -1,12 +1,12 @@
-# Python runtime
+# Python
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
 
-# Local env
-.env
-.env.*
+# Runtime data
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.json
 
-# Local smoke tests (intentionally excluded)
-app/_smoke_test_*.py
+# OS junk
+.DS_Store
