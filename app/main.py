@@ -88,18 +88,89 @@ async def _startup_invariants():
 
 @app.get("/health/details")
 def health_details():
-    # Recompute on demand (non-strict) to reflect live state too
-    live = startup_invariants(app, ServiceContainer)
-    return {
-        "ok": True,
-        "service": "red-v2",
-        "startup_invariants": _LAST_INVARIANTS,
-        "live_invariants": live,
-    }
+    """
+    Expanded health surface. Must never raise.
 
-# --- Runtime hardening endpoint ---
-from app.services.container import ServiceContainer
+    World snapshot shape may evolve; this handler must be shape-tolerant.
+    """
+    out = {"ok": True, "service": "red-v2"}
 
+    # World: always return a stable object with keys:
+    #   ok, store, counts, drift
+    try:
+        from app.services.container import ServiceContainer
+        import os
+
+        # ---- counts (canonical) ----
+        counts = None
+        try:
+            snap = ServiceContainer.world_engine.snapshot()
+
+            # Canonical case: dict with entities/events/relations/ok
+            if isinstance(snap, dict):
+                # If the engine ever returns nested counts, accept it too.
+                if isinstance(snap.get("counts"), dict):
+                    counts = dict(snap["counts"])
+                    if "ok" not in counts:
+                        counts["ok"] = bool(snap.get("ok", True))
+                else:
+                    # Normalize key variants
+                    rel = snap.get("relations", snap.get("relationships", 0))
+                    counts = {
+                        "ok": bool(snap.get("ok", True)),
+                        "entities": int(snap.get("entities", 0) or 0),
+                        "events": int(snap.get("events", 0) or 0),
+                        "relations": int(rel or 0),
+                    }
+            # Legacy tuple/list shapes: (ok, store, counts) or (ok, store, counts, drift)
+            elif isinstance(snap, (list, tuple)):
+                ok = bool(snap[0]) if len(snap) >= 1 else False
+                maybe_counts = snap[2] if len(snap) >= 3 else {}
+                if isinstance(maybe_counts, dict):
+                    counts = dict(maybe_counts)
+                    counts.setdefault("ok", ok)
+                else:
+                    counts = {"ok": ok}
+            else:
+                counts = {"ok": False, "error": f"Unexpected snapshot type: {type(snap)}"}
+        except Exception as e:
+            counts = {"ok": False, "error": str(e)}
+
+        # ---- store info ----
+        store = None
+        try:
+            eng = ServiceContainer.world_engine
+            st = getattr(eng, "store", None)
+            if st is not None and hasattr(st, "db_path"):
+                store = {"db_path": str(getattr(st, "db_path"))}
+            else:
+                store = {"db_path": os.getenv("WORLD_STORE_PATH", "/red/data/world.db")}
+        except Exception as e:
+            store = {"error": str(e)}
+
+        # ---- drift summary (best-effort, never raise) ----
+        drift = None
+        try:
+            eng = ServiceContainer.world_engine
+            if hasattr(eng, "analyze"):
+                drift = eng.analyze()  # should already be "never raise" by BU-4 discipline
+            else:
+                drift = {"ok": True, "drift_events": [], "note": "no analyze() on world_engine"}
+        except Exception as e:
+            drift = {"ok": False, "error": str(e)}
+
+        out["world"] = {
+            "ok": bool(counts.get("ok", True)) if isinstance(counts, dict) else False,
+            "store": store,
+            "counts": counts,
+            "drift": drift,
+        }
+
+    except Exception as e:
+        out["ok"] = False
+        out["world"] = {"ok": False, "error": str(e)}
+
+    return out
 @app.get("/health/runtime")
 def health_runtime():
     br = getattr(ServiceContainer, "semantic_breaker", None)
@@ -116,6 +187,7 @@ from app.api.planning_api import router as planning_router
 from app.api.observer_api import router as observer_engine_router
 from app.api.world_api import router as world_engine_router
 from app.api.upgrades_api import router as upgrades_router
+from app.api.health_world_api import router as health_world_router
 
 app.include_router(advisory_router)
 app.include_router(planning_router)
@@ -138,5 +210,6 @@ app.include_router(intent_router)
 # --- BU-1 Copilot Router ---
 from red.copilot.api import router as copilot_router
 app.include_router(copilot_router)
+app.include_router(health_world_router)
 # --- End BU-1 Copilot Router ---
 

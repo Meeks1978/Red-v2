@@ -25,24 +25,46 @@ class WorldEngine:
         self.trust = SensorTrustWeights()
         self.modeler = WorldModelerEngine(self.store)
 
-    def snapshot(self) -> Dict[str, Any]:
+    def snapshot(self):
+        """Return a world snapshot in a shape-tolerant way.
+    
+        Never raise. Never blindly unpack tuples.
+        """
         try:
-            entity_count, relation_count, event_count, last_ts = self.store.snapshot_counts()
-            stale_ids = self.store.staleness(stale_after_ms=6 * 60 * 60 * 1000)
-            drift = self.drift.compute(limit_entities=50)
-            snap = Snapshot(
-                store_path=str(self.store.db_path),
-                entity_count=entity_count,
-                relation_count=relation_count,
-                event_count=event_count,
-                last_event_ts=last_ts,
-                stale_entity_count=len(stale_ids),
-                drift_events_count=int(drift.get("count", 0) or 0),
-            )
-            return snap.model_dump()
+            snap = None
+            # Prefer store snapshot/counts if present
+            if hasattr(self.store, "snapshot") and callable(getattr(self.store, "snapshot")):
+                snap = self.store.snapshot()
+            elif hasattr(self.store, "snapshot_counts") and callable(getattr(self.store, "snapshot_counts")):
+                snap = self.store.snapshot_counts()
+            else:
+                db_path = getattr(self.store, "db_path", None)
+                snap = {
+                    "ok": True,
+                    "store": {"db_path": str(db_path) if db_path is not None else None},
+                    "counts": {"entities": 0, "events": 0, "relations": 0},
+                }
+    
+            # Dict shape: normalize
+            if isinstance(snap, dict):
+                out = dict(snap)
+                out.setdefault("ok", True)
+                return out
+    
+            # Tuple/list shapes: (ok, store, counts) or (ok, store, counts, drift)
+            if isinstance(snap, (list, tuple)):
+                ok = bool(snap[0]) if len(snap) >= 1 else False
+                store = snap[1] if len(snap) >= 2 else None
+                counts = snap[2] if len(snap) >= 3 else None
+                drift = snap[3] if len(snap) >= 4 else None
+                out = {"ok": ok, "store": store, "counts": counts}
+                if drift is not None:
+                    out["drift"] = drift
+                return out
+    
+            return {"ok": False, "error": f"Unexpected snapshot type: {type(snap)}"}
         except Exception as e:
             return {"ok": False, "error": str(e)}
-
     def analyze(self, *args, **kwargs) -> Dict[str, Any]:
         """
         Called by observer/middleware.

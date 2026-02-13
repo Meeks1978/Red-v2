@@ -273,3 +273,28 @@ class WorldStore:
         d["meta"] = meta
         self._write(d)
         return {"ok": True, "fingerprint": fp, "drift_events": drift_events, "count": len(drift_events)}
+
+    def snapshot_counts(self) -> dict:
+        """Best-effort counts for health/details snapshots.
+        Must NEVER raise (Phase-7 safe).
+        """
+        try:
+            # Prefer explicit counters if they exist
+            if hasattr(self, "count_entities") and callable(getattr(self, "count_entities")):
+                entities = int(self.count_entities())
+            else:
+                entities = len(self.list_entities()) if hasattr(self, "list_entities") else 0
+
+            if hasattr(self, "count_events") and callable(getattr(self, "count_events")):
+                events = int(self.count_events())
+            else:
+                events = len(self.list_events()) if hasattr(self, "list_events") else 0
+
+            if hasattr(self, "count_relations") and callable(getattr(self, "count_relations")):
+                relations = int(self.count_relations())
+            else:
+                relations = len(self.list_relations()) if hasattr(self, "list_relations") else 0
+
+            return {"entities": entities, "events": events, "relations": relations}
+        except Exception:
+            return {"entities": 0, "events": 0, "relations": 0}
