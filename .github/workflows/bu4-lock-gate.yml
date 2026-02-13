@@ -1,0 +1,131 @@
+name: BU-4 Lock Gate
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  bu4_lock_gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build red-red image
+        run: |
+          docker build --no-cache -t red-red .
+
+      - name: Start Red (container)
+        run: |
+          docker network create rednet >/dev/null 2>&1 || true
+          docker volume create red_memory >/dev/null 2>&1 || true
+
+          docker rm -f red >/dev/null 2>&1 || true
+          docker run -d \
+            --name red \
+            --network rednet \
+            -p 127.0.0.1:8111:8111 \
+            -v red_memory:/red/data \
+            -e ENABLE_SHADOW_OBSERVER=true \
+            -e ENABLE_BU3_INGEST=true \
+            -e ENABLE_SEMANTIC_MEMORY=true \
+            -e QDRANT_URL="http://qdrant:6333" \
+            -e QDRANT_COLLECTION="red_memory_semantic" \
+            -e QDRANT_DIM="384" \
+            -e APPROVAL_SIGNING_SECRET="ci-dev-secret" \
+            red-red
+
+      - name: Wait for /health
+        run: |
+          set -e
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8111/health >/dev/null 2>&1; then
+              echo "health ok"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "health never came up"
+          docker logs red --tail 250 || true
+          exit 1
+
+      - name: BU-4 HTTP contract checks
+        run: |
+          set -euo pipefail
+
+          # 1) health/details must be 200
+          curl -fsS http://127.0.0.1:8111/health/details >/tmp/hd.json
+
+          # 2) world snapshot must be 200
+          curl -fsS http://127.0.0.1:8111/v1/world/snapshot >/tmp/ws.json
+
+          # 3) world emit must succeed
+          curl -fsS -X POST http://127.0.0.1:8111/v1/world/emit \
+            -H "Content-Type: application/json" \
+            -d '{"kind":"note","entity_id":"bu4-ci","payload":{"msg":"bu4 ci emit"}}' >/tmp/emit.json
+
+          # 4) entity upsert must succeed
+          curl -fsS -X POST http://127.0.0.1:8111/v1/world/entities \
+            -H "Content-Type: application/json" \
+            -d '{"entity_id":"bu4-ci","kind":"service","attrs":{"k":"ci"}}' >/tmp/upsert.json
+
+          # 5) drift endpoint exists and returns JSON
+          curl -fsS "http://127.0.0.1:8111/v1/world/drift?limit=10" >/tmp/drift0.json
+
+          # 6) make a change, drift should reflect it (count >= 1 OR drift_events non-empty)
+          curl -fsS -X POST http://127.0.0.1:8111/v1/world/entities \
+            -H "Content-Type: application/json" \
+            -d '{"entity_id":"bu4-ci","kind":"service","attrs":{"k":"ci2"}}' >/tmp/upsert2.json
+          curl -fsS "http://127.0.0.1:8111/v1/world/drift?limit=10" >/tmp/drift1.json
+
+          python3 - <<'PY'
+          import json, sys
+          def load(p):
+            with open(p, "r", encoding="utf-8") as f:
+              return json.load(f)
+
+          hd = load("/tmp/hd.json")
+          ws = load("/tmp/ws.json")
+          emit = load("/tmp/emit.json")
+          up = load("/tmp/upsert.json")
+          d0 = load("/tmp/drift0.json")
+          d1 = load("/tmp/drift1.json")
+
+          # Hard requirements:
+          assert hd.get("ok") is True, f"/health/details ok!=true: {hd}"
+          w = hd.get("world") or {}
+          assert w.get("ok") is True, f"/health/details world.ok!=true: {w}"
+          assert (w.get("counts") is not None) or (w.get("entities") is not None), f"world counts missing: {w}"
+
+          assert ws.get("ok") is True, f"/v1/world/snapshot ok!=true: {ws}"
+          assert emit.get("ok") is True, f"/v1/world/emit ok!=true: {emit}"
+          assert up.get("ok") is True, f"/v1/world/entities ok!=true: {up}"
+
+          assert d0.get("ok") is True, f"/v1/world/drift baseline ok!=true: {d0}"
+          assert d1.get("ok") is True, f"/v1/world/drift after-change ok!=true: {d1}"
+
+          # After change: must show evidence of drift OR at least monotonically changing fingerprint
+          fp0 = d0.get("fingerprint")
+          fp1 = d1.get("fingerprint")
+          events1 = d1.get("drift_events") or []
+          count1 = d1.get("count", 0)
+
+          if (count1 or 0) < 1 and len(events1) < 1:
+            # allow fingerprint-only change as a fallback signal
+            assert fp0 != fp1, f"no drift_events and fingerprint unchanged (fp0==fp1=={fp0})"
+
+          print("BU-4 lock gate: PASS")
+          PY
+
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          docker logs red --tail 400 || true
+
+      - name: Stop Red
+        if: always()
+        run: |
+          docker rm -f red >/dev/null 2>&1 || true
